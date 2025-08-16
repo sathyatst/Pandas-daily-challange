@@ -147,6 +147,18 @@ def get_merged_range(sheet, row, col):
     return None
 
 # Check if a cell is part of an ignored color range (including merged cells)
+# Also helpers to resolve merged top-left value/format
+
+def get_top_left_coords(sheet, row, col):
+    merged = get_merged_range(sheet, row, col)
+    if merged:
+        return merged[0], merged[1]
+    return row, col
+
+def get_effective_value(ws_data, ws_format, row, col):
+    tl_r, tl_c = get_top_left_coords(ws_format, row, col)
+    return ws_data.cell(row=tl_r, column=tl_c).value
+
 def is_cell_in_ignored_range(sheet, row, col):
     """Check if a cell is part of an ignored color range (including merged cells)"""
     if is_cell_in_added_ranges(row, col):
@@ -362,12 +374,17 @@ for sheet_name in ordered_sheetnames:
     ws_sample_data = wb_sample_data[sheet_name]
     ws_imr_data = wb_imr_data[sheet_name]
 
-    ws_out = wb_output.create_sheet(title=sheet_name)
-    ws_out.append(["Cell", "Name", "Column Name", "Issue Type",
-                   "Sample Value", "Generated Value"])
+    ws_out = None
 
-    for col in range(1, 7):  # 6 columns
-        apply_header_formatting(ws_out.cell(row=1, column=col))
+    def ensure_ws_out():
+        nonlocal ws_out
+        if ws_out is None:
+            ws_out = wb_output.create_sheet(title=sheet_name)
+            ws_out.append(["Cell", "Name", "Column Name", "Issue Type",
+                           "Sample Value", "Generated Value"])
+            for col in range(1, 7):  # 6 columns
+                apply_header_formatting(ws_out.cell(row=1, column=col))
+        return ws_out
 
     # Track ignored issues separately
     ignored_issues = []
@@ -386,10 +403,10 @@ for sheet_name in ordered_sheetnames:
 
         # Process only the data cells (not headers)
         for r in range(start_row + 1, end_row + 1):
-            # Prefer sample row header; fallback to IMR
-            row_header = ws_sample_data.cell(row=r, column=start_col).value
+            # Prefer sample row header; fallback to IMR (respect merged top-left)
+            row_header = get_effective_value(ws_sample_data, ws_sample, r, start_col)
             if row_header is None:
-                row_header = ws_imr_data.cell(row=r, column=start_col).value
+                row_header = get_effective_value(ws_imr_data, ws_imr, r, start_col)
 
             for c in range(start_col + 1, end_col + 1):
                 # Skip cells that are in ignored ranges
@@ -400,15 +417,20 @@ for sheet_name in ordered_sheetnames:
                     continue
                 processed_table_cells.add((r, c))
 
-                # Prefer sample column header; fallback to IMR
-                col_header = ws_sample_data.cell(row=start_row, column=c).value
+                # Prefer sample column header; fallback to IMR (respect merged top-left)
+                col_header = get_effective_value(ws_sample_data, ws_sample, start_row, c)
                 if col_header is None:
-                    col_header = ws_imr_data.cell(row=start_row, column=c).value
+                    col_header = get_effective_value(ws_imr_data, ws_imr, start_row, c)
 
-                cell_sample_format = ws_sample.cell(row=r, column=c)
-                cell_imr_format = ws_imr.cell(row=r, column=c)
-                cell_sample_val = ws_sample_data.cell(row=r, column=c).value
-                cell_imr_val = ws_imr_data.cell(row=r, column=c).value
+                # Resolve merged values
+                cell_sample_val = get_effective_value(ws_sample_data, ws_sample, r, c)
+                cell_imr_val = get_effective_value(ws_imr_data, ws_imr, r, c)
+
+                # Use top-left format cell for merged
+                s_r, s_c = get_top_left_coords(ws_sample, r, c)
+                i_r, i_c = get_top_left_coords(ws_imr, r, c)
+                cell_sample_format = ws_sample.cell(row=s_r, column=s_c)
+                cell_imr_format = ws_imr.cell(row=i_r, column=i_c)
 
                 is_ignored = is_cell_in_ignored_range(ws_sample, r, c)
 
@@ -433,10 +455,11 @@ for sheet_name in ordered_sheetnames:
                         ignored_issues.append(issue_data)
                         ignored_issues_count += 1
                     else:
-                        current_row = ws_out.max_row + 1
-                        ws_out.append(issue_data)
+                        ws = ensure_ws_out()
+                        current_row = ws.max_row + 1
+                        ws.append(issue_data)
                         for col in range(1, 7):  # 6 columns
-                            apply_data_formatting(ws_out.cell(
+                            apply_data_formatting(ws.cell(
                                 row=current_row, column=col))
                         issues_count += 1
 
@@ -454,8 +477,8 @@ for sheet_name in ordered_sheetnames:
             if is_cell_in_ignored_ranges(r, c):
                 continue
 
-            val_sample = ws_sample_data.cell(row=r, column=c).value
-            val_imr = ws_imr_data.cell(row=r, column=c).value
+            val_sample = get_effective_value(ws_sample_data, ws_sample, r, c)
+            val_imr = get_effective_value(ws_imr_data, ws_imr, r, c)
 
             if (val_sample and isinstance(val_sample, str) and
                 val_sample.strip() and not str(val_sample).strip().isdigit() and
@@ -471,12 +494,14 @@ for sheet_name in ordered_sheetnames:
                     if is_cell_in_ignored_ranges(r, cc):
                         continue
 
-                    value_sample = ws_sample_data.cell(row=r, column=cc).value
-                    value_imr = ws_imr_data.cell(row=r, column=cc).value
+                    value_sample = get_effective_value(ws_sample_data, ws_sample, r, cc)
+                    value_imr = get_effective_value(ws_imr_data, ws_imr, r, cc)
 
                     if value_sample is not None or value_imr is not None:
-                        cell_sample_format = ws_sample.cell(row=r, column=cc)
-                        cell_imr_format = ws_imr.cell(row=r, column=cc)
+                        s_r, s_c = get_top_left_coords(ws_sample, r, cc)
+                        i_r, i_c = get_top_left_coords(ws_imr, r, cc)
+                        cell_sample_format = ws_sample.cell(row=s_r, column=s_c)
+                        cell_imr_format = ws_imr.cell(row=i_r, column=i_c)
 
                         is_ignored = is_cell_in_ignored_range(ws_sample, r, cc)
 
@@ -496,10 +521,11 @@ for sheet_name in ordered_sheetnames:
                                 ignored_issues.append(issue_data)
                                 ignored_issues_count += 1
                             else:
-                                current_row = ws_out.max_row + 1
-                                ws_out.append(issue_data)
+                                ws = ensure_ws_out()
+                                current_row = ws.max_row + 1
+                                ws.append(issue_data)
                                 for col in range(1, 7):  # 6 columns
-                                    apply_data_formatting(ws_out.cell(
+                                    apply_data_formatting(ws.cell(
                                         row=current_row, column=col))
                                 issues_count += 1
 
@@ -510,19 +536,20 @@ for sheet_name in ordered_sheetnames:
 
     # --- Add Ignored Columns Section ---
     if ignored_issues:
-        ws_out.append([])
-        ws_out.append(["***Columns To Be Ignored***"])
-        apply_header_formatting(ws_out.cell(row=ws_out.max_row, column=1))
-        ws_out.append(["Cell", "Name", "Column Name", "Issue Type",
-                       "Sample Value", "Generated Value"])
+        ws = ensure_ws_out()
+        ws.append([])
+        ws.append(["***Columns To Be Ignored***"])
+        apply_header_formatting(ws.cell(row=ws.max_row, column=1))
+        ws.append(["Cell", "Name", "Column Name", "Issue Type",
+                   "Sample Value", "Generated Value"])
         for col in range(1, 7):  # 6 columns
-            apply_header_formatting(ws_out.cell(
-                row=ws_out.max_row, column=col))
+            apply_header_formatting(ws.cell(
+                row=ws.max_row, column=col))
         for issue_data in ignored_issues:
-            current_row = ws_out.max_row + 1
-            ws_out.append(issue_data)
+            current_row = ws.max_row + 1
+            ws.append(issue_data)
             for col in range(1, 7):  # 6 columns
-                apply_data_formatting(ws_out.cell(row=current_row, column=col))
+                apply_data_formatting(ws.cell(row=current_row, column=col))
 
     # --- Summary ---
     summary_ws.cell(row=row_summary, column=1, value=sheet_name)
