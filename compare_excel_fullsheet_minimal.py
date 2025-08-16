@@ -388,6 +388,8 @@ for sheet_name in ordered_sheetnames:
     # Track ignored issues separately
     ignored_issues = []
 
+    seen_pairs = set()
+
     # --- Table comparison: include tables from both sheets ---
     table_ranges_sample = find_bordered_tables(ws_sample)
     table_ranges_imr = find_bordered_tables(ws_imr)
@@ -421,13 +423,22 @@ for sheet_name in ordered_sheetnames:
                 if col_header is None:
                     col_header = get_effective_value(ws_imr_data, ws_imr, start_row, c)
 
+                # Gate by merged canonical pair to avoid duplicates
+                s_r, s_c = get_top_left_coords(ws_sample, r, c)
+                i_r, i_c = get_top_left_coords(ws_imr, r, c)
+                pair_key = (s_r, s_c, i_r, i_c)
+                if pair_key in seen_pairs:
+                    continue
+                # Only evaluate the top-left of at least one merged region
+                if (r != s_r or c != s_c) and (r != i_r or c != i_c):
+                    continue
+                seen_pairs.add(pair_key)
+
                 # Resolve merged values
                 cell_sample_val = get_effective_value(ws_sample_data, ws_sample, r, c)
                 cell_imr_val = get_effective_value(ws_imr_data, ws_imr, r, c)
 
                 # Use top-left format cell for merged
-                s_r, s_c = get_top_left_coords(ws_sample, r, c)
-                i_r, i_c = get_top_left_coords(ws_imr, r, c)
                 cell_sample_format = ws_sample.cell(row=s_r, column=s_c)
                 cell_imr_format = ws_imr.cell(row=i_r, column=i_c)
 
@@ -497,8 +508,15 @@ for sheet_name in ordered_sheetnames:
                     value_imr = get_effective_value(ws_imr_data, ws_imr, r, cc)
 
                     if value_sample is not None or value_imr is not None:
+                        # Gate by merged canonical pair to avoid duplicates
                         s_r, s_c = get_top_left_coords(ws_sample, r, cc)
                         i_r, i_c = get_top_left_coords(ws_imr, r, cc)
+                        pair_key = (s_r, s_c, i_r, i_c)
+                        if pair_key in seen_pairs:
+                            continue
+                        if (r != s_r or cc != s_c) and (r != i_r or cc != i_c):
+                            continue
+                        seen_pairs.add(pair_key)
                         cell_sample_format = ws_sample.cell(row=s_r, column=s_c)
                         cell_imr_format = ws_imr.cell(row=i_r, column=i_c)
 
@@ -543,8 +561,12 @@ for sheet_name in ordered_sheetnames:
             # Only evaluate top-left of merged regions (in either sheet) to avoid duplicates
             s_r, s_c = get_top_left_coords(ws_sample, r, c)
             i_r, i_c = get_top_left_coords(ws_imr, r, c)
+            pair_key = (s_r, s_c, i_r, i_c)
+            if pair_key in seen_pairs:
+                continue
             if (r != s_r or c != s_c) and (r != i_r or c != i_c):
                 continue
+            seen_pairs.add(pair_key)
             val_sample = get_effective_value(ws_sample_data, ws_sample, r, c)
             val_imr = get_effective_value(ws_imr_data, ws_imr, r, c)
             if safe_str(val_sample) == safe_str(val_imr):
