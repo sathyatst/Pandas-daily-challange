@@ -376,15 +376,14 @@ for sheet_name in ordered_sheetnames:
 
     ws_out = None
 
-    def ensure_ws_out():
-        nonlocal ws_out
-        if ws_out is None:
-            ws_out = wb_output.create_sheet(title=sheet_name)
-            ws_out.append(["Cell", "Name", "Column Name", "Issue Type",
-                           "Sample Value", "Generated Value"])
+    def ensure_ws_out(current_ws_out):
+        if current_ws_out is None:
+            current_ws_out = wb_output.create_sheet(title=sheet_name)
+            current_ws_out.append(["Cell", "Name", "Column Name", "Issue Type",
+                                   "Sample Value", "Generated Value"])
             for col in range(1, 7):  # 6 columns
-                apply_header_formatting(ws_out.cell(row=1, column=col))
-        return ws_out
+                apply_header_formatting(current_ws_out.cell(row=1, column=col))
+        return current_ws_out
 
     # Track ignored issues separately
     ignored_issues = []
@@ -455,11 +454,11 @@ for sheet_name in ordered_sheetnames:
                         ignored_issues.append(issue_data)
                         ignored_issues_count += 1
                     else:
-                        ws = ensure_ws_out()
-                        current_row = ws.max_row + 1
-                        ws.append(issue_data)
+                        ws_out = ensure_ws_out(ws_out)
+                        current_row = ws_out.max_row + 1
+                        ws_out.append(issue_data)
                         for col in range(1, 7):  # 6 columns
-                            apply_data_formatting(ws.cell(
+                            apply_data_formatting(ws_out.cell(
                                 row=current_row, column=col))
                         issues_count += 1
 
@@ -521,11 +520,11 @@ for sheet_name in ordered_sheetnames:
                                 ignored_issues.append(issue_data)
                                 ignored_issues_count += 1
                             else:
-                                ws = ensure_ws_out()
-                                current_row = ws.max_row + 1
-                                ws.append(issue_data)
+                                ws_out = ensure_ws_out(ws_out)
+                                current_row = ws_out.max_row + 1
+                                ws_out.append(issue_data)
                                 for col in range(1, 7):  # 6 columns
-                                    apply_data_formatting(ws.cell(
+                                    apply_data_formatting(ws_out.cell(
                                         row=current_row, column=col))
                                 issues_count += 1
 
@@ -536,20 +535,20 @@ for sheet_name in ordered_sheetnames:
 
     # --- Add Ignored Columns Section ---
     if ignored_issues:
-        ws = ensure_ws_out()
-        ws.append([])
-        ws.append(["***Columns To Be Ignored***"])
-        apply_header_formatting(ws.cell(row=ws.max_row, column=1))
-        ws.append(["Cell", "Name", "Column Name", "Issue Type",
-                   "Sample Value", "Generated Value"])
+        ws_out = ensure_ws_out(ws_out)
+        ws_out.append([])
+        ws_out.append(["***Columns To Be Ignored***"])
+        apply_header_formatting(ws_out.cell(row=ws_out.max_row, column=1))
+        ws_out.append(["Cell", "Name", "Column Name", "Issue Type",
+                       "Sample Value", "Generated Value"])
         for col in range(1, 7):  # 6 columns
-            apply_header_formatting(ws.cell(
-                row=ws.max_row, column=col))
+            apply_header_formatting(ws_out.cell(
+                row=ws_out.max_row, column=col))
         for issue_data in ignored_issues:
-            current_row = ws.max_row + 1
-            ws.append(issue_data)
+            current_row = ws_out.max_row + 1
+            ws_out.append(issue_data)
             for col in range(1, 7):  # 6 columns
-                apply_data_formatting(ws.cell(row=current_row, column=col))
+                apply_data_formatting(ws_out.cell(row=current_row, column=col))
 
     # --- Summary ---
     summary_ws.cell(row=row_summary, column=1, value=sheet_name)
