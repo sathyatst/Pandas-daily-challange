@@ -486,6 +486,17 @@ for sheet_name in ordered_sheetnames:
         apply_header_formatting(ws_out.cell(row=1, column=col))
 
     ignored_issues = []
+    seen_pairs = set()
+
+    def is_top_left_position(r, c):
+        s_r, s_c = get_top_left_coords(ws_sample, r, c)
+        i_r, i_c = get_top_left_coords(ws_imr, r, c)
+        return (r == s_r and c == s_c) or (r == i_r and c == i_c)
+
+    def canonical_pair_for(r, c):
+        s_r, s_c = get_top_left_coords(ws_sample, r, c)
+        i_r, i_c = get_top_left_coords(ws_imr, r, c)
+        return (s_r, s_c, i_r, i_c)
 
     # --- Table comparison (UNION from both sheets) ---
     tables_sample = find_bordered_tables(ws_sample)
@@ -514,6 +525,15 @@ for sheet_name in ordered_sheetnames:
                 col_header = get_effective_value(ws_sample_data, ws_sample, start_row, c)
                 if col_header is None:
                     col_header = get_effective_value(ws_imr_data, ws_imr, start_row, c)
+
+                # Only evaluate once per merged pair canonical position to avoid duplicates
+                pair_key = canonical_pair_for(r, c)
+                if pair_key in seen_pairs:
+                    continue
+                # Gate by top-left in at least one sheet so we don't evaluate interior merged cells
+                if not is_top_left_position(r, c):
+                    continue
+                seen_pairs.add(pair_key)
 
                 # Effective values (respect merged top-left)
                 val_sample = get_effective_value(ws_sample_data, ws_sample, r, c)
@@ -558,6 +578,59 @@ for sheet_name in ordered_sheetnames:
     max_row_union = max(ws_sample.max_row, ws_imr.max_row)
     max_col_union = max(ws_sample.max_column, ws_imr.max_column)
 
+    # Fallback: also sweep the full grid for raw cell-by-cell differences outside tables
+    # to catch values in far columns like AAA that are not captured as key-value pairs
+    for r in range(1, max_row_union + 1):
+        for c in range(1, max_col_union + 1):
+            if (r, c) in union_table_cells:
+                continue
+            if is_cell_in_ignored_ranges(r, c):
+                continue
+            # Skip cells that will be handled by key-value scanning; only take isolated values
+            left_val_s = get_effective_value(ws_sample_data, ws_sample, r, c - 1) if c > 1 else None
+            left_val_i = get_effective_value(ws_imr_data, ws_imr, r, c - 1) if c > 1 else None
+            this_val_s = get_effective_value(ws_sample_data, ws_sample, r, c)
+            this_val_i = get_effective_value(ws_imr_data, ws_imr, r, c)
+
+            # Only consider if at least one side has a value
+            if this_val_s is None and this_val_i is None:
+                continue
+
+            # De-dup merged regions
+            pair_key = canonical_pair_for(r, c)
+            if pair_key in seen_pairs:
+                continue
+            if not is_top_left_position(r, c):
+                continue
+            seen_pairs.add(pair_key)
+
+            s_r, s_c = get_top_left_coords(ws_sample, r, c)
+            i_r, i_c = get_top_left_coords(ws_imr, r, c)
+            cell_sample_fmt = ws_sample.cell(row=s_r, column=s_c)
+            cell_imr_fmt = ws_imr.cell(row=i_r, column=i_c)
+
+            is_ignored = is_cell_ignored(ws_sample, ws_imr, r, c)
+
+            issues = compare_cell(cell_sample_fmt, cell_imr_fmt, this_val_s, this_val_i)
+            for issue in issues:
+                issue_data = [
+                    ws_sample.cell(row=r, column=c).coordinate,
+                    "",
+                    "",
+                    issue["type"],
+                    issue["sample"],
+                    issue["generated"]
+                ]
+                if is_ignored:
+                    ignored_issues.append(issue_data)
+                    ignored_issues_count += 1
+                else:
+                    current_row = ws_out.max_row + 1
+                    ws_out.append(issue_data)
+                    for col in range(1, 7):
+                        apply_data_formatting(ws_out.cell(row=current_row, column=col))
+                    issues_count += 1
+
     def looks_like_key(text):
         if not text or not isinstance(text, str):
             return False
@@ -594,8 +667,20 @@ for sheet_name in ordered_sheetnames:
                     if is_cell_in_ignored_ranges(r, cc):
                         continue
 
+                    # Skip if cc is also a key-like cell to avoid chaining keys
+                    if looks_like_key(get_effective_value(src_data, src_ws, r, cc)):
+                        break
+
                     value_src = get_effective_value(src_data, src_ws, r, cc)
                     value_other = get_effective_value(other_data, other_ws, r, cc)
+
+                    # De-dup against merged canonical pair
+                    pair_key = canonical_pair_for(r, cc)
+                    if pair_key in seen_pairs:
+                        continue
+                    if not is_top_left_position(r, cc):
+                        continue
+                    seen_pairs.add(pair_key)
 
                     # Only consider positions where there is some content (in either)
                     if value_src is None and value_other is None:
