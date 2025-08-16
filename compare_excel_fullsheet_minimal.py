@@ -267,6 +267,48 @@ def find_bordered_tables(sheet):
                 tables.append((i, j, end_row, end_col))
     return tables
 
+# Add a hyperlink to the summary sheet
+def add_hyperlink(sheet_summary, row, col, target_sheet, display_text=None):
+    cell = sheet_summary.cell(row=row, column=col)
+    display_text = display_text or target_sheet
+    if re.search(r"[^A-Za-z_]", target_sheet):
+        safe_sheet_name = f"'{target_sheet}'"
+    else:
+        safe_sheet_name = target_sheet
+    cell.hyperlink = f"#{safe_sheet_name}!A1"
+    cell.value = display_text
+    cell.font = Font(name="Aptos Narrow", size=11, color="0000FF", underline="single")
+    cell.border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    cell.alignment = Alignment(horizontal="left", vertical="top")
+
+# Apply header formatting to a cell
+def apply_header_formatting(cell):
+    cell.font = Font(name="Aptos Narrow", size=12, bold=True, color="000000")
+    cell.fill = PatternFill(start_color="ADD8E6", end_color="ADD8E6", fill_type="solid")
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+    cell.border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+
+# Apply data formatting to a cell
+def apply_data_formatting(cell):
+    cell.font = Font(name="Aptos Narrow", size=11, color="000000")
+    cell.alignment = Alignment(horizontal="left", vertical="top")
+    cell.border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+
 # --- Main comparison ---
 wb_output = Workbook()
 summary_ws = wb_output.active
