@@ -533,6 +533,46 @@ for sheet_name in ordered_sheetnames:
 
                 processed_cells.add((r, c))
 
+    # --- Fallback sweep: compare any remaining cells outside tables/key-value ---
+    for r in range(1, max_row + 1):
+        for c in range(1, max_col + 1):
+            if (r, c) in table_cells or (r, c) in processed_cells:
+                continue
+            if is_cell_in_ignored_ranges(r, c):
+                continue
+            # Only evaluate top-left of merged regions (in either sheet) to avoid duplicates
+            s_r, s_c = get_top_left_coords(ws_sample, r, c)
+            i_r, i_c = get_top_left_coords(ws_imr, r, c)
+            if (r != s_r or c != s_c) and (r != i_r or c != i_c):
+                continue
+            val_sample = get_effective_value(ws_sample_data, ws_sample, r, c)
+            val_imr = get_effective_value(ws_imr_data, ws_imr, r, c)
+            if safe_str(val_sample) == safe_str(val_imr):
+                continue
+            cell_sample_format = ws_sample.cell(row=s_r, column=s_c)
+            cell_imr_format = ws_imr.cell(row=i_r, column=i_c)
+            is_ignored = is_cell_in_ignored_range(ws_sample, r, c)
+            issues = compare_cell(cell_sample_format, cell_imr_format, val_sample, val_imr)
+            for issue in issues:
+                issue_data = [
+                    ws_sample.cell(row=r, column=c).coordinate,
+                    "",
+                    "",
+                    issue["type"],
+                    issue["sample"],
+                    issue["generated"]
+                ]
+                if is_ignored:
+                    ignored_issues.append(issue_data)
+                    ignored_issues_count += 1
+                else:
+                    ws_out = ensure_ws_out(ws_out)
+                    current_row = ws_out.max_row + 1
+                    ws_out.append(issue_data)
+                    for col in range(1, 7):  # 6 columns
+                        apply_data_formatting(ws_out.cell(row=current_row, column=col))
+                    issues_count += 1
+
     # --- Add Ignored Columns Section ---
     if ignored_issues:
         ws_out = ensure_ws_out(ws_out)
