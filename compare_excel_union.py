@@ -135,14 +135,59 @@ def compare_border(b1, b2):
 		})
 	return issues
 
+# Highlight the differing numeric portion (primarily fractional) between two numbers
+def highlight_numerical_diff(value_sample, value_imr):
+	def to_string(value):
+		return str(value)
+
+	s1 = to_string(value_sample)
+	s2 = to_string(value_imr)
+
+	# If both contain a decimal point, try to highlight only the differing fractional part
+	if "." in s1 and "." in s2:
+		int1, frac1 = s1.split(".", 1)
+		int2, frac2 = s2.split(".", 1)
+		if int1 == int2:
+			# Compare fraction strings to find first differing index
+			min_len = min(len(frac1), len(frac2))
+			diff_idx = -1
+			for i in range(min_len):
+				if frac1[i] != frac2[i]:
+					diff_idx = i
+					break
+			if diff_idx == -1:
+				# They are identical for the common length; difference is length-based
+				diff_idx = min_len
+			high_s1 = int1 + "." + frac1[:diff_idx] + "(" + frac1[diff_idx:] + ")"
+			high_s2 = int2 + "." + frac2[:diff_idx] + "(" + frac2[diff_idx:] + ")"
+			return high_s1, high_s2
+
+	# Fallback: highlight from first differing character across the full string
+	min_len = min(len(s1), len(s2))
+	diff_idx = -1
+	for i in range(min_len):
+		if s1[i] != s2[i]:
+			diff_idx = i
+			break
+	if diff_idx == -1 and len(s1) != len(s2):
+		diff_idx = min_len
+	if diff_idx != -1:
+		return s1[:diff_idx] + "(" + s1[diff_idx:] + ")", s2[:diff_idx] + "(" + s2[diff_idx:] + ")"
+	return s1, s2
+
 # Compare two cells: format and value
 def compare_cell(cell_sample_format, cell_imr_format, cell_sample_val, cell_imr_val):
 	issues = []
 	if safe_str(cell_sample_val) != safe_str(cell_imr_val):
+		# If both are numeric, highlight the differing numeric portion
+		if isinstance(cell_sample_val, (int, float)) and isinstance(cell_imr_val, (int, float)):
+			sample_str, imr_str = highlight_numerical_diff(cell_sample_val, cell_imr_val)
+		else:
+			sample_str, imr_str = safe_str(cell_sample_val), safe_str(cell_imr_val)
 		issues.append({
 			"type": "Value Mismatch",
-			"sample": safe_str(cell_sample_val),
-			"generated": safe_str(cell_imr_val)
+			"sample": sample_str,
+			"generated": imr_str
 		})
 	issues += compare_fonts(cell_sample_format.font, cell_imr_format.font)
 	issues += compare_alignment(cell_sample_format.alignment,
