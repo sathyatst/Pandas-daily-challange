@@ -1,5 +1,6 @@
 import os
 import re
+import difflib
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 try:
@@ -371,6 +372,66 @@ def merge_rectangles(rects):
         rects = new_rects
     return rects
 
+def header_similarity(text_a, text_b):
+    """Compute similarity between two header strings in [0,1]."""
+    if text_a is None or text_b is None:
+        return 0.0
+    a = str(text_a).strip().lower()
+    b = str(text_b).strip().lower()
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+def pair_columns_order_preserving(header_sample_map, header_imr_map, similarity_threshold=0.72):
+    """
+    Pair headers from sample and IMR in order-preserving way using fuzzy similarity.
+    Inputs are dicts of {header_text: column_index} built in left-to-right order.
+    Returns:
+      - paired: list of tuples (sample_header, imr_header)
+      - missing_in_imr: list of sample headers with no match
+      - missing_in_sample: list of imr headers with no match
+    """
+    sample_headers = list(header_sample_map.keys())
+    imr_headers = list(header_imr_map.keys())
+
+    paired = []
+    used_imr = set()
+
+    # First pass: exact matches to lock-in quickly
+    for s_hdr in sample_headers:
+        if s_hdr in header_imr_map and s_hdr not in used_imr:
+            paired.append((s_hdr, s_hdr))
+            used_imr.add(s_hdr)
+
+    # Second pass: fuzzy matching for remaining
+    for s_hdr in sample_headers:
+        if any(s_hdr == p[0] for p in paired):
+            continue
+        best_hdr = None
+        best_score = similarity_threshold
+        for i_hdr in imr_headers:
+            if i_hdr in used_imr:
+                continue
+            score = header_similarity(s_hdr, i_hdr)
+            if score > best_score:
+                best_score = score
+                best_hdr = i_hdr
+        if best_hdr is not None:
+            paired.append((s_hdr, best_hdr))
+            used_imr.add(best_hdr)
+
+    # Preserve original left-to-right order based on sample
+    paired.sort(key=lambda x: sample_headers.index(x[0]))
+
+    matched_sample = {s for s, _ in paired}
+    matched_imr = {i for _, i in paired}
+    missing_in_imr = [s for s in sample_headers if s not in matched_sample]
+    missing_in_sample = [i for i in imr_headers if i not in matched_imr]
+
+    return paired, missing_in_imr, missing_in_sample
+
 # Add a hyperlink to the summary sheet
 def add_hyperlink(sheet_summary, row, col, target_sheet, display_text=None):
     cell = sheet_summary.cell(row=row, column=col)
@@ -510,54 +571,108 @@ for sheet_name in ordered_sheetnames:
                 union_table_cells.add((r, c))
 
     for (start_row, start_col, end_row, end_col) in union_tables:
-        # Data rows (exclude header row & header col)
+        # Build header maps from header row (exclude the first column which is usually row labels)
+        header_sample_map = {}
+        header_imr_map = {}
+        for c in range(start_col + 1, end_col + 1):
+            hs = get_effective_value(ws_sample_data, ws_sample, start_row, c)
+            hi = get_effective_value(ws_imr_data, ws_imr, start_row, c)
+            if isinstance(hs, str):
+                hs = hs.strip()
+            if isinstance(hi, str):
+                hi = hi.strip()
+            if hs not in (None, ""):
+                header_sample_map[str(hs)] = c
+            if hi not in (None, ""):
+                header_imr_map[str(hi)] = c
+
+        # Pair columns using fuzzy, order-preserving alignment
+        paired_cols, missing_in_imr, missing_in_sample = pair_columns_order_preserving(header_sample_map, header_imr_map)
+
+        # Report header mismatches as value mismatches (once per pair)
+        for s_hdr, i_hdr in paired_cols:
+            if s_hdr != i_hdr:
+                c_s = header_sample_map[s_hdr]
+                issue_data = [
+                    ws_sample.cell(row=start_row, column=c_s).coordinate,
+                    "Header",
+                    s_hdr,
+                    "Value Mismatch",
+                    s_hdr,
+                    i_hdr
+                ]
+                ws_out.append(issue_data)
+                issues_count += 1
+
+        # Report true missing columns
+        for s_hdr in missing_in_imr:
+            c_s = header_sample_map[s_hdr]
+            issue_data = [
+                ws_sample.cell(row=start_row, column=c_s).coordinate,
+                "",
+                s_hdr,
+                "Missing in report",
+                s_hdr,
+                ""
+            ]
+            ws_out.append(issue_data)
+            issues_count += 1
+
+        for i_hdr in missing_in_sample:
+            c_i = header_imr_map[i_hdr]
+            issue_data = [
+                ws_imr.cell(row=start_row, column=c_i).coordinate,
+                "",
+                i_hdr,
+                "Missing in sample",
+                "",
+                i_hdr
+            ]
+            ws_out.append(issue_data)
+            issues_count += 1
+
+        # Now compare data for paired columns row-by-row using the mapped indices
+        seen_row_pairs = set()
         for r in range(start_row + 1, end_row + 1):
             # Row header: prefer sample value else IMR
             row_header = get_effective_value(ws_sample_data, ws_sample, r, start_col)
             if row_header is None:
                 row_header = get_effective_value(ws_imr_data, ws_imr, r, start_col)
 
-            for c in range(start_col + 1, end_col + 1):
-                if is_cell_in_ignored_ranges(r, c):
+            for s_hdr, i_hdr in paired_cols:
+                c_s = header_sample_map[s_hdr]
+                c_i = header_imr_map[i_hdr]
+
+                if is_cell_in_ignored_ranges(r, c_s) and is_cell_in_ignored_ranges(r, c_i):
                     continue
 
-                # Column header: prefer sample value else IMR
-                col_header = get_effective_value(ws_sample_data, ws_sample, start_row, c)
-                if col_header is None:
-                    col_header = get_effective_value(ws_imr_data, ws_imr, start_row, c)
-
-                # Only evaluate once per merged pair canonical position to avoid duplicates
-                pair_key = canonical_pair_for(r, c)
-                if pair_key in seen_pairs:
+                # Only evaluate once per (row, sample_col, imr_col)
+                pair_key = (r, c_s, c_i)
+                if pair_key in seen_row_pairs:
                     continue
-                # Gate by top-left in at least one sheet so we don't evaluate interior merged cells
-                if not is_top_left_position(r, c):
-                    continue
-                seen_pairs.add(pair_key)
+                seen_row_pairs.add(pair_key)
 
-                # Effective values (respect merged top-left)
-                val_sample = get_effective_value(ws_sample_data, ws_sample, r, c)
-                val_imr = get_effective_value(ws_imr_data, ws_imr, r, c)
+                # Effective values and formats (respect merged)
+                val_sample = get_effective_value(ws_sample_data, ws_sample, r, c_s)
+                val_imr = get_effective_value(ws_imr_data, ws_imr, r, c_i)
 
-                # Effective format cells (use top-left cell for merged regions)
-                s_r, s_c = get_top_left_coords(ws_sample, r, c)
-                i_r, i_c = get_top_left_coords(ws_imr, r, c)
+                s_r, s_c = get_top_left_coords(ws_sample, r, c_s)
+                i_r, i_c = get_top_left_coords(ws_imr, r, c_i)
                 cell_sample_fmt = ws_sample.cell(row=s_r, column=s_c)
                 cell_imr_fmt = ws_imr.cell(row=i_r, column=i_c)
 
-                is_ignored = is_cell_ignored(ws_sample, ws_imr, r, c)
+                # Consider ignored if either side is ignored
+                is_ignored = (
+                    is_cell_ignored(ws_sample, ws_imr, r, c_s) or
+                    is_cell_ignored(ws_sample, ws_imr, r, c_i)
+                )
 
                 issues = compare_cell(cell_sample_fmt, cell_imr_fmt, val_sample, val_imr)
                 for issue in issues:
-                    if issue["type"] == "Value Mismatch":
-                        column_name = col_header
-                    else:
-                        column_name = safe_str(val_sample)
-
                     issue_data = [
-                        ws_sample.cell(row=r, column=c).coordinate,
+                        ws_sample.cell(row=r, column=c_s).coordinate,
                         row_header,
-                        column_name,
+                        s_hdr,
                         issue["type"],
                         issue["sample"],
                         issue["generated"]
