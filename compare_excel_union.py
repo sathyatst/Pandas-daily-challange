@@ -136,7 +136,18 @@ def compare_border(b1, b2):
 	return issues
 
 # Highlight the differing numeric portion (primarily fractional) between two numbers
-def highlight_numerical_diff(value_sample, value_imr):
+def get_precision_from_format(number_format):
+	"""Extract decimal precision from an Excel number format string. Returns None if not found."""
+	if not isinstance(number_format, str):
+		return None
+	# Look for a decimal point followed by placeholders like '0' or '#'
+	import re as _re
+	match = _re.search(r"\.([0#]+)", number_format)
+	if match:
+		return len(match.group(1))
+	return None
+
+def highlight_numerical_diff(value_sample, value_imr, imr_number_format=None):
 	def to_string(value):
 		return str(value)
 
@@ -148,6 +159,19 @@ def highlight_numerical_diff(value_sample, value_imr):
 		int1, frac1 = s1.split(".", 1)
 		int2, frac2 = s2.split(".", 1)
 		if int1 == int2:
+			# Determine display precision from IMR number format if available; else use frac2 length
+			precision = get_precision_from_format(imr_number_format)
+			if precision is None:
+				precision = len(frac2)
+			# Build highlighted sample: keep up to precision digits, skip one rounding digit, highlight remainder
+			if len(frac1) > precision:
+				prefix = frac1[:precision]
+				# Index of rounding digit is 'precision' if exists
+				remainder_start = precision + 1 if len(frac1) > precision else precision
+				remainder = frac1[remainder_start:]
+				if remainder:
+					return int1 + "." + prefix + "(" + remainder + ")", s2
+			# If cannot compute as above, fall back to generic diff
 			# Compare fraction strings to find first differing index
 			min_len = min(len(frac1), len(frac2))
 			diff_idx = -1
@@ -158,9 +182,7 @@ def highlight_numerical_diff(value_sample, value_imr):
 			if diff_idx == -1:
 				# They are identical for the common length; difference is length-based
 				diff_idx = min_len
-			high_s1 = int1 + "." + frac1[:diff_idx] + "(" + frac1[diff_idx:] + ")"
-			high_s2 = int2 + "." + frac2[:diff_idx] + "(" + frac2[diff_idx:] + ")"
-			return high_s1, high_s2
+			return int1 + "." + frac1[:diff_idx] + "(" + frac1[diff_idx:] + ")", int2 + "." + frac2
 
 	# Fallback: highlight from first differing character across the full string
 	min_len = min(len(s1), len(s2))
@@ -172,7 +194,7 @@ def highlight_numerical_diff(value_sample, value_imr):
 	if diff_idx == -1 and len(s1) != len(s2):
 		diff_idx = min_len
 	if diff_idx != -1:
-		return s1[:diff_idx] + "(" + s1[diff_idx:] + ")", s2[:diff_idx] + "(" + s2[diff_idx:] + ")"
+		return s1[:diff_idx] + "(" + s1[diff_idx:] + ")", s2
 	return s1, s2
 
 # Compare two cells: format and value
@@ -181,7 +203,7 @@ def compare_cell(cell_sample_format, cell_imr_format, cell_sample_val, cell_imr_
 	if safe_str(cell_sample_val) != safe_str(cell_imr_val):
 		# If both are numeric, highlight the differing numeric portion
 		if isinstance(cell_sample_val, (int, float)) and isinstance(cell_imr_val, (int, float)):
-			sample_str, imr_str = highlight_numerical_diff(cell_sample_val, cell_imr_val)
+			sample_str, imr_str = highlight_numerical_diff(cell_sample_val, cell_imr_val, cell_imr_format.number_format)
 		else:
 			sample_str, imr_str = safe_str(cell_sample_val), safe_str(cell_imr_val)
 		issues.append({
